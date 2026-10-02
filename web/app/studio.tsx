@@ -43,9 +43,34 @@ const SIZES = [
 
 type SizeId = (typeof SIZES)[number]["id"];
 
-const DIWALI_TEXT_LAYERS = [
-  "l_text:Arial_72_bold:Diwali%20Sale,co_rgb:7c2d12,g_north,y_48",
-  "l_text:Arial_42:Free%20delivery,co_rgb:7c2d12,g_south,y_48",
+const FESTIVALS = [
+  { id: "none", label: "None", offer: "", color: "111827" },
+  { id: "diwali", label: "Diwali", offer: "Diwali Sale", color: "7c2d12" },
+  { id: "navratri", label: "Navratri", offer: "Navratri Sale", color: "9a3412" },
+  { id: "dussehra", label: "Dussehra", offer: "Dussehra Sale", color: "7c2d12" },
+  {
+    id: "raksha-bandhan",
+    label: "Raksha Bandhan",
+    offer: "Raksha Bandhan",
+    color: "9f1239",
+  },
+  { id: "eid", label: "Eid", offer: "Eid Sale", color: "14532d" },
+  { id: "christmas", label: "Christmas", offer: "Christmas Sale", color: "14532d" },
+] as const;
+
+type FestivalId = (typeof FESTIVALS)[number]["id"];
+
+const OVERLAY_MAX = 28;
+
+const DOWNLOADS = [
+  { sizeId: "square", label: "Meesho", filename: "meesho.png", withText: false },
+  {
+    sizeId: "instagram",
+    label: "Instagram post",
+    filename: "instagram-post.png",
+    withText: true,
+  },
+  { sizeId: "story", label: "Story", filename: "story.png", withText: true },
 ] as const;
 
 const MAX_ATTEMPTS = 10;
@@ -111,10 +136,47 @@ function backdropImageFor(backdrop: BackdropId) {
   return null;
 }
 
-function appendTransformations(url: string, extras: readonly string[]) {
-  if (extras.length === 0) {
-    return url;
+function sanitizeOverlayText(value: string) {
+  return value.replace(/[,"'/\\:]/g, "").slice(0, OVERLAY_MAX);
+}
+
+function encodeOverlayText(value: string) {
+  const clean = sanitizeOverlayText(value).trim();
+  if (!clean) {
+    return "";
   }
+  return encodeURIComponent(clean);
+}
+
+function overlayTextLayers(
+  color: string,
+  name: string,
+  price: string,
+  offer: string,
+) {
+  const layers: string[] = [];
+  const encodedName = encodeOverlayText(name);
+  const encodedPrice = encodeOverlayText(price);
+  const encodedOffer = encodeOverlayText(offer);
+  if (encodedName) {
+    layers.push(
+      `l_text:Arial_48_bold:${encodedName},co_rgb:${color},g_north,y_48`,
+    );
+  }
+  if (encodedPrice) {
+    layers.push(
+      `l_text:Arial_32_bold:${encodedPrice},co_rgb:${color},g_south_west,x_48,y_48`,
+    );
+  }
+  if (encodedOffer) {
+    layers.push(
+      `l_text:Arial_32:${encodedOffer},co_rgb:${color},g_south_east,x_48,y_48`,
+    );
+  }
+  return layers;
+}
+
+function finishDeliveryUrl(url: string, extras: readonly string[]) {
   const marker = "/image/upload/";
   const start = url.indexOf(marker);
   if (start === -1) {
@@ -131,7 +193,15 @@ function appendTransformations(url: string, extras: readonly string[]) {
   }
   const chain = path.slice(0, versionMatch.index);
   const rest = path.slice(versionMatch.index);
-  return `${head}${chain}/${extras.join("/")}${rest}${query}`;
+  const components = chain
+    .split("/")
+    .filter((part) => part.length > 0 && part !== "f_auto,q_auto");
+  const finalChain = [...components, ...extras, "f_auto,q_auto"].join("/");
+  return `${head}${finalChain}${rest}${query}`;
+}
+
+function padFor(sizeId: SizeId) {
+  return SIZES.find((option) => option.id === sizeId)?.pad ?? SIZES[0].pad;
 }
 
 function chipClass(selected: boolean) {
@@ -140,9 +210,9 @@ function chipClass(selected: boolean) {
     : "inline-flex h-10 max-w-full items-center justify-center rounded-xl bg-white/10 px-4 text-sm font-medium text-white";
 }
 
-function listingAlt(backdrop: BackdropId, withPoster: boolean) {
-  if (withPoster) {
-    return "Diwali poster";
+function listingAlt(backdrop: BackdropId, withText: boolean) {
+  if (withText) {
+    return "Listing image with product text";
   }
   if (backdrop === "marble") {
     return "Product on a marble counter";
@@ -157,7 +227,10 @@ export default function Studio() {
   const [publicId, setPublicId] = useState<string | null>(null);
   const [backdrop, setBackdrop] = useState<BackdropId>("studio-white");
   const [size, setSize] = useState<SizeId>("square");
-  const [poster, setPoster] = useState(false);
+  const [festival, setFestival] = useState<FestivalId>("none");
+  const [productName, setProductName] = useState("");
+  const [price, setPrice] = useState("");
+  const [offer, setOffer] = useState("");
   const [attempt, setAttempt] = useState(1);
   const [retryNonce, setRetryNonce] = useState(0);
   const [ready, setReady] = useState<{ id: string; url: string } | null>(null);
@@ -170,21 +243,35 @@ export default function Studio() {
 
   const selectedBackdrop = backdropImageFor(backdrop);
   const selectedSize = SIZES.find((option) => option.id === size) ?? SIZES[0];
+  const selectedFestival =
+    FESTIVALS.find((option) => option.id === festival) ?? FESTIVALS[0];
+  const textLayers =
+    festival === "none"
+      ? []
+      : overlayTextLayers(
+          selectedFestival.color,
+          productName,
+          price,
+          offer,
+        );
   const backdropUrl = !publicId
     ? null
     : selectedBackdrop
       ? tryGeneratedDeliveryUrl(publicId, selectedBackdrop)
       : tryCleanedDeliveryUrl(publicId);
   const sizeUrl = backdropUrl
-    ? appendTransformations(backdropUrl, [selectedSize.pad])
+    ? finishDeliveryUrl(backdropUrl, [selectedSize.pad])
     : null;
-  const posterUrl = backdropUrl
-    ? appendTransformations(backdropUrl, [
-        selectedSize.pad,
-        ...DIWALI_TEXT_LAYERS,
-      ])
+  const deliveryUrl = backdropUrl
+    ? finishDeliveryUrl(backdropUrl, [selectedSize.pad, ...textLayers])
     : null;
-  const deliveryUrl = poster ? posterUrl : sizeUrl;
+  function downloadTarget(sizeId: SizeId, withText: boolean) {
+    if (!backdropUrl) {
+      return null;
+    }
+    const layers = withText ? textLayers : [];
+    return finishDeliveryUrl(backdropUrl, [padFor(sizeId), ...layers]);
+  }
   const cleanedUrl =
     publicId && ready?.id === publicId && ready.url === deliveryUrl
       ? ready.url
@@ -195,10 +282,10 @@ export default function Studio() {
       : publicId && error?.id === publicId && error.url === deliveryUrl
         ? error.message
         : null;
-  const posterTextFailed = Boolean(
-    poster && sizeUrl && errorMessage?.startsWith("400"),
+  const textFailed = Boolean(
+    textLayers.length > 0 && sizeUrl && errorMessage?.startsWith("400"),
   );
-  const visibleUrl = cleanedUrl ?? (posterTextFailed ? sizeUrl : null);
+  const visibleUrl = cleanedUrl ?? (textFailed ? sizeUrl : null);
 
   useEffect(() => {
     if (!publicId || !deliveryUrl) {
@@ -288,18 +375,13 @@ export default function Studio() {
     };
   }, [publicId, deliveryUrl, retryNonce]);
 
-  async function downloadCleanedImage() {
-    if (!visibleUrl || !publicId) {
+  async function downloadCleanedImage(url: string | null, filename: string) {
+    if (!url || !publicId) {
       return;
     }
 
-    const filename =
-      poster && visibleUrl === posterUrl
-        ? `poster-${size}.png`
-        : `listing-${size}.png`;
-
     try {
-      const response = await fetch(visibleUrl, { cache: "no-store" });
+      const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) {
         setDownloadError("Couldn't download the cleaned image.");
         return;
@@ -365,7 +447,10 @@ export default function Studio() {
                     setAttempt(1);
                     setBackdrop("studio-white");
                     setSize("square");
-                    setPoster(false);
+                    setFestival("none");
+                    setProductName("");
+                    setPrice("");
+                    setOffer("");
                     setPublicId(result.info.public_id);
                     setRetryNonce((current) => current + 1);
                     close();
@@ -422,13 +507,13 @@ export default function Studio() {
                       className="h-auto w-full overflow-visible rounded-xl bg-white/5"
                       style={{ height: "auto", overflow: "visible", maxHeight: "none" }}
                     >
-                      {/* Delivery URL already ends in the size pad. CldImage would append another resize. */}
+                      {/* The delivery URL is already fully composed. CldImage would append another resize. */}
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={visibleUrl}
                         alt={listingAlt(
                           backdrop,
-                          poster && visibleUrl === posterUrl,
+                          textLayers.length > 0 && visibleUrl === deliveryUrl,
                         )}
                         className="h-auto w-full object-contain"
                         style={{
@@ -439,7 +524,7 @@ export default function Studio() {
                         }}
                       />
                     </div>
-                    {posterTextFailed && errorMessage ? (
+                    {textFailed && errorMessage ? (
                       <div className="flex flex-col items-start gap-3">
                         <p className="max-w-full break-all text-left text-xs text-white">
                           {errorMessage}
@@ -551,29 +636,101 @@ export default function Studio() {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  aria-pressed={poster}
-                  onClick={() => {
-                    setAttempt(1);
-                    setError(null);
-                    setDownloadError(null);
-                    setPoster((current) => !current);
-                  }}
-                  className={chipClass(poster)}
-                >
-                  Diwali poster
-                </button>
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm text-white/60">Festival</p>
+                  <div
+                    className="flex flex-wrap gap-2"
+                    role="group"
+                    aria-label="Festival"
+                  >
+                    {FESTIVALS.map((option) => {
+                      const selected = festival === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => {
+                            setAttempt(1);
+                            setError(null);
+                            setDownloadError(null);
+                            setFestival(option.id);
+                            setOffer(sanitizeOverlayText(option.offer));
+                          }}
+                          className={chipClass(selected)}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm text-white/60">Product name</span>
+                  <input
+                    type="text"
+                    value={productName}
+                    maxLength={OVERLAY_MAX}
+                    onChange={(event) => {
+                      setAttempt(1);
+                      setError(null);
+                      setDownloadError(null);
+                      setProductName(sanitizeOverlayText(event.target.value));
+                    }}
+                    className="h-10 w-full rounded-xl border border-white/10 bg-white/10 px-3 text-sm text-white outline-none"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm text-white/60">Price</span>
+                  <input
+                    type="text"
+                    value={price}
+                    maxLength={OVERLAY_MAX}
+                    onChange={(event) => {
+                      setAttempt(1);
+                      setError(null);
+                      setDownloadError(null);
+                      setPrice(sanitizeOverlayText(event.target.value));
+                    }}
+                    className="h-10 w-full rounded-xl border border-white/10 bg-white/10 px-3 text-sm text-white outline-none"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm text-white/60">Offer</span>
+                  <input
+                    type="text"
+                    value={offer}
+                    maxLength={OVERLAY_MAX}
+                    onChange={(event) => {
+                      setAttempt(1);
+                      setError(null);
+                      setDownloadError(null);
+                      setOffer(sanitizeOverlayText(event.target.value));
+                    }}
+                    className="h-10 w-full rounded-xl border border-white/10 bg-white/10 px-3 text-sm text-white outline-none"
+                  />
+                </label>
 
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-                  <button
-                    type="button"
-                    onClick={() => void downloadCleanedImage()}
-                    disabled={!visibleUrl}
-                    className="inline-flex h-11 max-w-full items-center justify-center rounded-full bg-white px-5 text-sm font-medium text-[#0c0c0c] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Download listing image
-                  </button>
+                  {DOWNLOADS.map((option) => {
+                    const url = downloadTarget(option.sizeId, option.withText);
+                    return (
+                      <button
+                        key={option.filename}
+                        type="button"
+                        onClick={() =>
+                          void downloadCleanedImage(url, option.filename)
+                        }
+                        disabled={!visibleUrl || !url}
+                        className="inline-flex h-11 max-w-full items-center justify-center rounded-full bg-white px-5 text-sm font-medium text-[#0c0c0c] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
                   <button
                     type="button"
                     onClick={() => {
@@ -583,7 +740,10 @@ export default function Studio() {
                       setAttempt(1);
                       setBackdrop("studio-white");
                       setSize("square");
-                      setPoster(false);
+                      setFestival("none");
+                      setProductName("");
+                      setPrice("");
+                      setOffer("");
                       setPublicId(null);
                     }}
                     className="text-sm font-medium text-white/70"
